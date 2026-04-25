@@ -16,6 +16,14 @@
     <name>thales-transparent-lb</name>
     <description>Thales HSM Transparent Load Balancer — passes raw Thales commands to N HSM nodes</description>
 
+    <developers>
+        <developer>
+            <name>Bhaskar Singh</name>
+            <email>bhaskar2285@gmail.com</email>
+            <organization>ISC</organization>
+        </developer>
+    </developers>
+
     <properties>
         <java.version>25</java.version>
         <maven.compiler.release>25</maven.compiler.release>

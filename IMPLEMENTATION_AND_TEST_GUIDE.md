@@ -4,6 +4,7 @@
 **Project:** `thales-transparent-lb`  
 **Version:** 1.0.0  
 **Date:** 2026-04-25  
+**Author:** Bhaskar Singh  
 **Classification:** Internal — Restricted  
 
 ---
@@ -790,5 +791,6 @@ tail -f /var/log/xenticate/thales-lb.log | grep -E "Routing|replied|health|ERROR
 ---
 
 *Document prepared: 2026-04-25*  
+*Author: Bhaskar Singh*  
 *Tested on: Thales payShield tunnel, 127.0.0.1:7004*  
 *Total test requests executed: 12 | Errors: 0*
