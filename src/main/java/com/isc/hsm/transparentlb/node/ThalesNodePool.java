@@ -27,6 +27,7 @@ public class ThalesNodePool {
     public byte[] send(byte[] rawCommand) throws Exception {
         node.incrementActive();
         node.recordRequest();
+        long t0 = System.currentTimeMillis();
         try (Socket socket = new Socket()) {
             socket.setSoTimeout(props.getPool().getSocketTimeoutMs());
             socket.setTcpNoDelay(true);
@@ -46,10 +47,12 @@ public class ThalesNodePool {
             out.flush();
 
             byte[] response = readResponse(in);
+            node.getResponseStats().record(System.currentTimeMillis() - t0, false);
             node.recordSuccess();
             return response;
 
         } catch (Exception e) {
+            node.getResponseStats().record(System.currentTimeMillis() - t0, true);
             node.recordError();
             throw e;
         } finally {

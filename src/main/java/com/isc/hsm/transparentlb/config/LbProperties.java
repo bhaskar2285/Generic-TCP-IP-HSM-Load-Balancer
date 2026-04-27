@@ -21,6 +21,15 @@ public class LbProperties {
     private RetryConfig retry = new RetryConfig();
     private PayloadConfig payload = new PayloadConfig();
     private RequestConfig request = new RequestConfig();
+    private AdaptiveConfig adaptive = new AdaptiveConfig();
+
+    public static class AdaptiveConfig {
+        private long intervalMs = 30000;
+        public long getIntervalMs() { return intervalMs; }
+        public void setIntervalMs(long v) { intervalMs = v; }
+    }
+    public AdaptiveConfig getAdaptive() { return adaptive; }
+    public void setAdaptive(AdaptiveConfig v) { adaptive = v; }
 
     public List<NodeEntry> parsedNodes() {
         List<NodeEntry> result = new ArrayList<>();
@@ -54,10 +63,13 @@ public class LbProperties {
     public static class JmsConfig {
         private int concurrentConsumers = 20;
         private int maxConcurrentConsumers = 100;
+        private int perNodeCapacity = 10;
         public int getConcurrentConsumers() { return concurrentConsumers; }
         public void setConcurrentConsumers(int v) { concurrentConsumers = v; }
         public int getMaxConcurrentConsumers() { return maxConcurrentConsumers; }
         public void setMaxConcurrentConsumers(int v) { maxConcurrentConsumers = v; }
+        public int getPerNodeCapacity() { return perNodeCapacity; }
+        public void setPerNodeCapacity(int v) { perNodeCapacity = v; }
     }
 
     public static class PoolConfig {
@@ -65,6 +77,7 @@ public class LbProperties {
         private int minIdle = 2;
         private long maxWaitMs = 3000;
         private int socketTimeoutMs = 10000;
+        private volatile int effectiveSocketTimeoutMs = 10000;
         private int connectTimeoutMs = 3000;
         public int getMaxTotal() { return maxTotal; }
         public void setMaxTotal(int v) { maxTotal = v; }
@@ -72,8 +85,10 @@ public class LbProperties {
         public void setMinIdle(int v) { minIdle = v; }
         public long getMaxWaitMs() { return maxWaitMs; }
         public void setMaxWaitMs(long v) { maxWaitMs = v; }
-        public int getSocketTimeoutMs() { return socketTimeoutMs; }
-        public void setSocketTimeoutMs(int v) { socketTimeoutMs = v; }
+        public int getSocketTimeoutMs() { return effectiveSocketTimeoutMs; }
+        public void setSocketTimeoutMs(int v) { socketTimeoutMs = v; effectiveSocketTimeoutMs = v; }
+        public int getConfiguredSocketTimeoutMs() { return socketTimeoutMs; }
+        public void setEffectiveSocketTimeoutMs(int v) { effectiveSocketTimeoutMs = v; }
         public int getConnectTimeoutMs() { return connectTimeoutMs; }
         public void setConnectTimeoutMs(int v) { connectTimeoutMs = v; }
     }

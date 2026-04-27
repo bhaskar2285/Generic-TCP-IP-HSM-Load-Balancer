@@ -45,14 +45,20 @@ public class PassthroughHandler {
             throw new IllegalStateException("No HSM nodes available");
         }
 
-        int maxAttempts = Math.min(props.getRetry().getMaxAttempts(), candidates.size());
+        // Retry strategy:
+        // - Multiple nodes: try each once, no same-node retry (avoids TTL exhaustion)
+        // - Single node only: retry that node up to maxAttempts times
+        int configuredMax = props.getRetry().getMaxAttempts();
+        int totalAttempts = candidates.size() == 1 ? configuredMax : candidates.size();
         List<ThalesNodePool> tried = new ArrayList<>();
         Exception lastError = null;
 
-        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+        for (int attempt = 1; attempt <= totalAttempts; attempt++) {
             List<ThalesNodePool> remaining = candidates.stream()
                 .filter(p -> !tried.contains(p))
                 .toList();
+            if (remaining.isEmpty()) tried.clear(); // single-node retry: reset
+            remaining = candidates.stream().filter(p -> !tried.contains(p)).toList();
             if (remaining.isEmpty()) break;
 
             Optional<ThalesNodePool> selected = lbSelector.get().select(remaining);
@@ -103,14 +109,14 @@ public class PassthroughHandler {
                 meters.counter("hsm.lb.requests", "node", nodeId, "result", "error").increment();
 
                 log.warn("!!! ERROR    node={} attempt={}/{} latency={}ms error={}",
-                    nodeId, attempt, maxAttempts, latency, e.getMessage());
+                    nodeId, attempt, totalAttempts, latency, e.getMessage());
                 lastError = e;
             }
         }
 
         meters.counter("hsm.lb.requests", "result", "exhausted").increment();
         throw lastError != null ? lastError
-            : new IllegalStateException("All HSM nodes exhausted after " + maxAttempts + " attempts");
+            : new IllegalStateException("All HSM nodes exhausted after " + totalAttempts + " attempts");
     }
 
     private static String toHex(byte[] bytes) {

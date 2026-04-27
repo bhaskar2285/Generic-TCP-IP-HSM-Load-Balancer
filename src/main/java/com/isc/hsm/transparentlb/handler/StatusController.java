@@ -1,10 +1,12 @@
 package com.isc.hsm.transparentlb.handler;
 
+import com.isc.hsm.transparentlb.config.LbProperties;
 import com.isc.hsm.transparentlb.lb.LoadBalancerSelector;
 import com.isc.hsm.transparentlb.node.ThalesNode;
 import com.isc.hsm.transparentlb.node.ThalesNodePool;
 import com.isc.hsm.transparentlb.node.ThalesNodeRegistry;
 import org.springframework.http.ResponseEntity;
+import org.springframework.jms.listener.DefaultMessageListenerContainer;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
@@ -18,10 +20,17 @@ public class StatusController {
 
     private final ThalesNodeRegistry registry;
     private final LoadBalancerSelector lbSelector;
+    private final DefaultMessageListenerContainer listenerContainer;
+    private final LbProperties props;
 
-    public StatusController(ThalesNodeRegistry registry, LoadBalancerSelector lbSelector) {
+    public StatusController(ThalesNodeRegistry registry,
+                            LoadBalancerSelector lbSelector,
+                            DefaultMessageListenerContainer listenerContainer,
+                            LbProperties props) {
         this.registry = registry;
         this.lbSelector = lbSelector;
+        this.listenerContainer = listenerContainer;
+        this.props = props;
     }
 
     @GetMapping("/status")
@@ -34,6 +43,10 @@ public class StatusController {
         result.put("totalNodes", all.size());
         result.put("healthyNodes", registry.getHealthyPools().size());
         result.put("availableNodes", registry.getAvailablePools().size());
+        result.put("jmsMaxConsumers", listenerContainer.getMaxConcurrentConsumers());
+        result.put("jmsActiveConsumers", listenerContainer.getActiveConsumerCount());
+        result.put("effectiveSocketTimeoutMs", props.getPool().getSocketTimeoutMs());
+        result.put("configuredSocketTimeoutMs", props.getPool().getConfiguredSocketTimeoutMs());
         result.put("nodes", nodes);
         return result;
     }

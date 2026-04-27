@@ -11,6 +11,8 @@ public class ThalesNode {
     private final int port;
     private final int weight;
 
+    private final NodeResponseStats responseStats = new NodeResponseStats();
+
     private final AtomicBoolean healthy = new AtomicBoolean(false);
     private final AtomicBoolean enabled = new AtomicBoolean(true);
     private final AtomicInteger activeConnections = new AtomicInteger(0);
@@ -95,6 +97,9 @@ public class ThalesNode {
     public long getLastHealthCheckMs() { return lastHealthCheckMs; }
     public int getConsecutiveErrors() { return consecutiveErrors.get(); }
     public long getCircuitOpenedAt() { return circuitOpenedAt; }
+    public int getCircuitFailureThreshold() { return circuitFailureThreshold; }
+    public void setCircuitFailureThreshold(int v) { this.circuitFailureThreshold = v; }
+    public NodeResponseStats getResponseStats() { return responseStats; }
 
     @Override
     public String toString() {
