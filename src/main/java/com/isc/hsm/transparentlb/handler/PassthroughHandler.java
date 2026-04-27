@@ -1,15 +1,19 @@
 package com.isc.hsm.transparentlb.handler;
 
+import com.isc.hsm.transparentlb.config.LbProperties;
 import com.isc.hsm.transparentlb.lb.LoadBalancerSelector;
 import com.isc.hsm.transparentlb.node.ThalesNodePool;
 import com.isc.hsm.transparentlb.node.ThalesNodeRegistry;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 @Component
 public class PassthroughHandler {
@@ -19,55 +23,94 @@ public class PassthroughHandler {
 
     private final ThalesNodeRegistry registry;
     private final LoadBalancerSelector lbSelector;
+    private final LbProperties props;
+    private final MeterRegistry meters;
 
-    @Value("${hsm.lb.payload.log.enabled:false}")
-    private boolean payloadLogEnabled;
-
-    public PassthroughHandler(ThalesNodeRegistry registry, LoadBalancerSelector lbSelector) {
+    public PassthroughHandler(ThalesNodeRegistry registry,
+                              LoadBalancerSelector lbSelector,
+                              LbProperties props,
+                              MeterRegistry meters) {
         this.registry = registry;
         this.lbSelector = lbSelector;
+        this.props = props;
+        this.meters = meters;
     }
 
     public byte[] handle(byte[] rawCommand) throws Exception {
-        List<ThalesNodePool> healthy = registry.getHealthyPools();
-        if (healthy.isEmpty()) {
-            healthy = registry.getAllPools();
-        }
-        if (healthy.isEmpty()) {
-            throw new IllegalStateException("No Thales nodes available");
-        }
-
-        Optional<ThalesNodePool> selected = lbSelector.get().select(healthy);
-        if (selected.isEmpty()) {
-            throw new IllegalStateException("Load balancer returned no node");
+        // Prefer healthy nodes; fall back to any available (circuit-closed) node
+        List<ThalesNodePool> candidates = registry.getHealthyPools();
+        if (candidates.isEmpty()) candidates = registry.getAvailablePools();
+        if (candidates.isEmpty()) {
+            meters.counter("hsm.lb.requests", "result", "no_nodes").increment();
+            throw new IllegalStateException("No HSM nodes available");
         }
 
-        ThalesNodePool pool = selected.get();
-        String nodeId = pool.getNode().getId();
-        long t0 = System.currentTimeMillis();
+        int maxAttempts = Math.min(props.getRetry().getMaxAttempts(), candidates.size());
+        List<ThalesNodePool> tried = new ArrayList<>();
+        Exception lastError = null;
 
-        log.debug(">>> REQUEST  node={} bytes={} hex={}", nodeId, rawCommand.length, toHex(rawCommand));
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            List<ThalesNodePool> remaining = candidates.stream()
+                .filter(p -> !tried.contains(p))
+                .toList();
+            if (remaining.isEmpty()) break;
 
-        if (payloadLogEnabled) {
-            payloadLog.debug(">>> REQUEST  node={} bytes={} hex={}", nodeId, rawCommand.length, toHex(rawCommand));
-        }
+            Optional<ThalesNodePool> selected = lbSelector.get().select(remaining);
+            if (selected.isEmpty()) break;
 
-        try {
-            byte[] response = pool.send(rawCommand);
-            long latency = System.currentTimeMillis() - t0;
+            ThalesNodePool pool = selected.get();
+            tried.add(pool);
+            String nodeId = pool.getNode().getId();
+            long t0 = System.currentTimeMillis();
 
-            log.debug("<<< RESPONSE node={} bytes={} latency={}ms hex={}", nodeId, response.length, latency, toHex(response));
-
-            if (payloadLogEnabled) {
-                payloadLog.debug("<<< RESPONSE node={} bytes={} latency={}ms hex={}", nodeId, response.length, latency, toHex(response));
+            if (props.getPayload().isLogEnabled()) {
+                payloadLog.debug(">>> REQUEST  node={} attempt={} bytes={} hex={}",
+                    nodeId, attempt, rawCommand.length, toHex(rawCommand));
             }
+            log.debug(">>> REQUEST  node={} attempt={} bytes={} hex={}",
+                nodeId, attempt, rawCommand.length, toHex(rawCommand));
 
-            return response;
+            try {
+                byte[] response = pool.send(rawCommand);
+                long latency = System.currentTimeMillis() - t0;
 
-        } catch (Exception e) {
-            log.error("!!! ERROR    node={} latency={}ms error={}", nodeId, System.currentTimeMillis() - t0, e.getMessage());
-            throw e;
+                Timer.builder("hsm.lb.request.duration")
+                    .tag("node", nodeId)
+                    .tag("result", "success")
+                    .register(meters)
+                    .record(latency, TimeUnit.MILLISECONDS);
+                meters.counter("hsm.lb.requests", "node", nodeId, "result", "success").increment();
+
+                log.debug("<<< RESPONSE node={} attempt={} bytes={} latency={}ms hex={}",
+                    nodeId, attempt, response.length, latency, toHex(response));
+                if (props.getPayload().isLogEnabled()) {
+                    payloadLog.debug("<<< RESPONSE node={} attempt={} bytes={} latency={}ms hex={}",
+                        nodeId, attempt, response.length, latency, toHex(response));
+                }
+
+                if (attempt > 1) {
+                    log.info("Request succeeded on attempt {} via node={}", attempt, nodeId);
+                }
+                return response;
+
+            } catch (Exception e) {
+                long latency = System.currentTimeMillis() - t0;
+                Timer.builder("hsm.lb.request.duration")
+                    .tag("node", nodeId)
+                    .tag("result", "error")
+                    .register(meters)
+                    .record(latency, TimeUnit.MILLISECONDS);
+                meters.counter("hsm.lb.requests", "node", nodeId, "result", "error").increment();
+
+                log.warn("!!! ERROR    node={} attempt={}/{} latency={}ms error={}",
+                    nodeId, attempt, maxAttempts, latency, e.getMessage());
+                lastError = e;
+            }
         }
+
+        meters.counter("hsm.lb.requests", "result", "exhausted").increment();
+        throw lastError != null ? lastError
+            : new IllegalStateException("All HSM nodes exhausted after " + maxAttempts + " attempts");
     }
 
     private static String toHex(byte[] bytes) {

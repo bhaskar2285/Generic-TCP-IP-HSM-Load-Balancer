@@ -1,15 +1,15 @@
 package com.isc.hsm.transparentlb.jms;
 
+import com.isc.hsm.transparentlb.config.LbProperties;
 import com.isc.hsm.transparentlb.handler.PassthroughHandler;
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.jms.BytesMessage;
 import jakarta.jms.Destination;
 import jakarta.jms.JMSException;
 import jakarta.jms.Message;
 import jakarta.jms.MessageListener;
-import jakarta.jms.Session;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jms.core.JmsTemplate;
 import org.springframework.stereotype.Component;
 
@@ -20,13 +20,17 @@ public class HsmRequestListener implements MessageListener {
 
     private final PassthroughHandler handler;
     private final JmsTemplate jmsTemplate;
+    private final LbProperties props;
+    private final MeterRegistry meters;
 
-    @Value("${hsm.lb.queue.reply:hsm.transparent.lb.reply}")
-    private String defaultReplyQueue;
-
-    public HsmRequestListener(PassthroughHandler handler, JmsTemplate jmsTemplate) {
+    public HsmRequestListener(PassthroughHandler handler,
+                              JmsTemplate jmsTemplate,
+                              LbProperties props,
+                              MeterRegistry meters) {
         this.handler = handler;
         this.jmsTemplate = jmsTemplate;
+        this.props = props;
+        this.meters = meters;
     }
 
     @Override
@@ -34,38 +38,43 @@ public class HsmRequestListener implements MessageListener {
         String correlationId = null;
         Destination replyTo = null;
         try {
-            correlationId = message.getJMSCorrelationID();
-            if (correlationId == null) correlationId = message.getJMSMessageID();
-            replyTo = message.getJMSReplyTo();
-
-            // Debug: dump all JMS headers to understand how eznet-tcp2jms correlates replies
-            if (log.isDebugEnabled()) {
-                java.util.Enumeration<?> props = message.getPropertyNames();
-                StringBuilder sb = new StringBuilder("JMS headers: messageId=").append(message.getJMSMessageID())
-                    .append(" correlationId=").append(message.getJMSCorrelationID())
-                    .append(" replyTo=").append(replyTo)
-                    .append(" props={");
-                while (props.hasMoreElements()) {
-                    String k = props.nextElement().toString();
-                    sb.append(k).append("=").append(message.getObjectProperty(k)).append(" ");
+            // TTL enforcement: drop messages older than configured max age
+            long maxAgeMs = props.getRequest().getMaxAgeMs();
+            if (maxAgeMs > 0) {
+                long timestamp = message.getJMSTimestamp();
+                if (timestamp > 0 && System.currentTimeMillis() - timestamp > maxAgeMs) {
+                    log.warn("Dropping expired JMS message (age={}ms, max={}ms)",
+                        System.currentTimeMillis() - timestamp, maxAgeMs);
+                    meters.counter("hsm.lb.messages.dropped", "reason", "expired").increment();
+                    return;
                 }
-                sb.append("}");
-                log.debug("{}", sb);
             }
+
+            correlationId = message.getStringProperty("ip_connectionId");
+            String eznetReplyTo = message.getStringProperty("gw_replyTo");
+            replyTo = message.getJMSReplyTo();
+            if (replyTo == null && eznetReplyTo != null) {
+                final String dest = eznetReplyTo;
+                replyTo = jmsTemplate.execute(session -> session.createQueue(dest));
+            }
+            if (correlationId == null) correlationId = message.getJMSMessageID();
+            log.debug("Request connectionId={} replyTo={}", correlationId, replyTo);
 
             byte[] rawCommand = extractBytes(message);
             if (rawCommand == null || rawCommand.length == 0) {
                 log.warn("Received empty message, correlationId={}", correlationId);
+                meters.counter("hsm.lb.messages.dropped", "reason", "empty").increment();
                 return;
             }
 
+            meters.counter("hsm.lb.messages.received").increment();
             byte[] response = handler.handle(rawCommand);
             sendReply(replyTo, correlationId, response);
 
         } catch (Exception e) {
             log.error("Failed to process HSM request correlationId={}: {}", correlationId, e.getMessage(), e);
-            // Send error indicator back to caller if replyTo is set
-            if (replyTo != null && correlationId != null) {
+            meters.counter("hsm.lb.messages.errors").increment();
+            if (correlationId != null) {
                 sendErrorReply(replyTo, correlationId);
             }
         }
@@ -87,28 +96,45 @@ public class HsmRequestListener implements MessageListener {
             jmsTemplate.send(replyTo, session -> {
                 BytesMessage reply = session.createBytesMessage();
                 reply.writeBytes(response);
-                if (corrId != null) reply.setJMSCorrelationID(corrId);
+                if (corrId != null) {
+                    reply.setJMSCorrelationID(corrId);
+                    reply.setStringProperty("ip_connectionId", corrId);
+                }
                 return reply;
             });
         } else {
-            // eznet-tcp2jms doesn't set JMSReplyTo — fall back to configured reply queue
-            log.debug("No replyTo on message, sending to default reply queue={} correlationId={}", defaultReplyQueue, corrId);
-            jmsTemplate.send(defaultReplyQueue, session -> {
+            String fallback = props.getQueue().getReply();
+            log.debug("No replyTo, falling back to queue={} correlationId={}", fallback, corrId);
+            jmsTemplate.send(fallback, session -> {
                 BytesMessage reply = session.createBytesMessage();
                 reply.writeBytes(response);
-                if (corrId != null) reply.setJMSCorrelationID(corrId);
+                if (corrId != null) {
+                    reply.setJMSCorrelationID(corrId);
+                    reply.setStringProperty("ip_connectionId", corrId);
+                }
                 return reply;
             });
         }
     }
 
     private void sendErrorReply(Destination replyTo, String correlationId) {
-        // Send a minimal error frame — caller can detect by 2-byte length = 0
-        jmsTemplate.send(replyTo, session -> {
-            BytesMessage reply = session.createBytesMessage();
-            reply.writeBytes(new byte[]{0, 0}); // zero-length body signals error
-            reply.setJMSCorrelationID(correlationId);
-            return reply;
-        });
+        if (replyTo != null) {
+            jmsTemplate.send(replyTo, session -> {
+                BytesMessage reply = session.createBytesMessage();
+                reply.writeBytes(new byte[]{0, 0});
+                reply.setJMSCorrelationID(correlationId);
+                reply.setStringProperty("ip_connectionId", correlationId);
+                return reply;
+            });
+        } else {
+            String fallback = props.getQueue().getReply();
+            jmsTemplate.send(fallback, session -> {
+                BytesMessage reply = session.createBytesMessage();
+                reply.writeBytes(new byte[]{0, 0});
+                reply.setJMSCorrelationID(correlationId);
+                reply.setStringProperty("ip_connectionId", correlationId);
+                return reply;
+            });
+        }
     }
 }

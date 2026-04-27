@@ -11,14 +11,16 @@ import java.util.List;
 public class LbProperties {
 
     private String algorithm = "ROUND_ROBIN";
+    private String nodes = "";
 
     private QueueConfig queue = new QueueConfig();
     private JmsConfig jms = new JmsConfig();
     private PoolConfig pool = new PoolConfig();
     private HealthConfig health = new HealthConfig();
-
-    // Raw comma-separated node list: id:host:port:weight,...
-    private String nodes = "";
+    private CircuitBreakerConfig circuitBreaker = new CircuitBreakerConfig();
+    private RetryConfig retry = new RetryConfig();
+    private PayloadConfig payload = new PayloadConfig();
+    private RequestConfig request = new RequestConfig();
 
     public List<NodeEntry> parsedNodes() {
         List<NodeEntry> result = new ArrayList<>();
@@ -40,10 +42,13 @@ public class LbProperties {
     public static class QueueConfig {
         private String inbound = "hsm.transparent.lb.in";
         private String control = "hsm.transparent.lb.control";
+        private String reply = "hsm.transparent.lb.reply";
         public String getInbound() { return inbound; }
         public void setInbound(String v) { inbound = v; }
         public String getControl() { return control; }
         public void setControl(String v) { control = v; }
+        public String getReply() { return reply; }
+        public void setReply(String v) { reply = v; }
     }
 
     public static class JmsConfig {
@@ -74,7 +79,7 @@ public class LbProperties {
     }
 
     public static class HealthConfig {
-        private long intervalMs = 5000;
+        private long intervalMs = 20000;
         private String commandHex = "0008303030304e4f3030";
         public long getIntervalMs() { return intervalMs; }
         public void setIntervalMs(long v) { intervalMs = v; }
@@ -82,7 +87,33 @@ public class LbProperties {
         public void setCommandHex(String v) { commandHex = v; }
     }
 
-    // Getters / setters
+    public static class CircuitBreakerConfig {
+        private int failureThreshold = 5;
+        private long resetMs = 30000;
+        public int getFailureThreshold() { return failureThreshold; }
+        public void setFailureThreshold(int v) { failureThreshold = v; }
+        public long getResetMs() { return resetMs; }
+        public void setResetMs(long v) { resetMs = v; }
+    }
+
+    public static class RetryConfig {
+        private int maxAttempts = 2;
+        public int getMaxAttempts() { return maxAttempts; }
+        public void setMaxAttempts(int v) { maxAttempts = v; }
+    }
+
+    public static class PayloadConfig {
+        private boolean logEnabled = false;
+        public boolean isLogEnabled() { return logEnabled; }
+        public void setLogEnabled(boolean v) { logEnabled = v; }
+    }
+
+    public static class RequestConfig {
+        private long maxAgeMs = 30000;
+        public long getMaxAgeMs() { return maxAgeMs; }
+        public void setMaxAgeMs(long v) { maxAgeMs = v; }
+    }
+
     public String getAlgorithm() { return algorithm; }
     public void setAlgorithm(String v) { algorithm = v; }
     public String getNodes() { return nodes; }
@@ -95,4 +126,12 @@ public class LbProperties {
     public void setPool(PoolConfig v) { pool = v; }
     public HealthConfig getHealth() { return health; }
     public void setHealth(HealthConfig v) { health = v; }
+    public CircuitBreakerConfig getCircuitBreaker() { return circuitBreaker; }
+    public void setCircuitBreaker(CircuitBreakerConfig v) { circuitBreaker = v; }
+    public RetryConfig getRetry() { return retry; }
+    public void setRetry(RetryConfig v) { retry = v; }
+    public PayloadConfig getPayload() { return payload; }
+    public void setPayload(PayloadConfig v) { payload = v; }
+    public RequestConfig getRequest() { return request; }
+    public void setRequest(RequestConfig v) { request = v; }
 }
