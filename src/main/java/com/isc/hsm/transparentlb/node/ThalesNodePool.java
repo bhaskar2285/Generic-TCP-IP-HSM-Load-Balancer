@@ -49,6 +49,11 @@ public class ThalesNodePool {
             OutputStream out = socket.getOutputStream();
             InputStream in = socket.getInputStream();
 
+            // eznet-tcp2jms strips the 2-byte length prefix before publishing to JMS;
+            // payShield expects it on the wire, so we reattach it here.
+            int len = rawCommand.length;
+            out.write((len >> 8) & 0xFF);
+            out.write(len & 0xFF);
             out.write(rawCommand);
             out.flush();
 
@@ -69,19 +74,16 @@ public class ThalesNodePool {
     }
 
     private byte[] readResponse(InputStream in) throws Exception {
-        // Read 2-byte length header
+        // Read 2-byte length header then body.
+        // Return only the body — eznet-tcp2jms re-adds the 2-byte TCP framing when
+        // sending back to the TCP client, so including it here would double-prefix.
         byte[] lenBuf = new byte[2];
         readFully(in, lenBuf, 2);
         int bodyLen = ((lenBuf[0] & 0xFF) << 8) | (lenBuf[1] & 0xFF);
 
         byte[] body = new byte[bodyLen];
         readFully(in, body, bodyLen);
-
-        byte[] full = new byte[2 + bodyLen];
-        full[0] = lenBuf[0];
-        full[1] = lenBuf[1];
-        System.arraycopy(body, 0, full, 2, bodyLen);
-        return full;
+        return body;
     }
 
     private void readFully(InputStream in, byte[] buf, int len) throws Exception {

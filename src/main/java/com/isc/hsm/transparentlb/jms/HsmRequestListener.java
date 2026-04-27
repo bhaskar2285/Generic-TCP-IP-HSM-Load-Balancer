@@ -9,6 +9,7 @@ import jakarta.jms.MessageListener;
 import jakarta.jms.Session;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jms.core.JmsTemplate;
 import org.springframework.stereotype.Component;
 
@@ -19,6 +20,9 @@ public class HsmRequestListener implements MessageListener {
 
     private final PassthroughHandler handler;
     private final JmsTemplate jmsTemplate;
+
+    @Value("${hsm.lb.queue.reply:hsm.transparent.lb.reply}")
+    private String defaultReplyQueue;
 
     public HsmRequestListener(PassthroughHandler handler, JmsTemplate jmsTemplate) {
         this.handler = handler;
@@ -31,7 +35,23 @@ public class HsmRequestListener implements MessageListener {
         Destination replyTo = null;
         try {
             correlationId = message.getJMSCorrelationID();
+            if (correlationId == null) correlationId = message.getJMSMessageID();
             replyTo = message.getJMSReplyTo();
+
+            // Debug: dump all JMS headers to understand how eznet-tcp2jms correlates replies
+            if (log.isDebugEnabled()) {
+                java.util.Enumeration<?> props = message.getPropertyNames();
+                StringBuilder sb = new StringBuilder("JMS headers: messageId=").append(message.getJMSMessageID())
+                    .append(" correlationId=").append(message.getJMSCorrelationID())
+                    .append(" replyTo=").append(replyTo)
+                    .append(" props={");
+                while (props.hasMoreElements()) {
+                    String k = props.nextElement().toString();
+                    sb.append(k).append("=").append(message.getObjectProperty(k)).append(" ");
+                }
+                sb.append("}");
+                log.debug("{}", sb);
+            }
 
             byte[] rawCommand = extractBytes(message);
             if (rawCommand == null || rawCommand.length == 0) {
@@ -62,17 +82,24 @@ public class HsmRequestListener implements MessageListener {
     }
 
     private void sendReply(Destination replyTo, String correlationId, byte[] response) {
-        if (replyTo == null) {
-            log.debug("No replyTo destination, dropping response for correlationId={}", correlationId);
-            return;
-        }
         final String corrId = correlationId;
-        jmsTemplate.send(replyTo, session -> {
-            BytesMessage reply = session.createBytesMessage();
-            reply.writeBytes(response);
-            if (corrId != null) reply.setJMSCorrelationID(corrId);
-            return reply;
-        });
+        if (replyTo != null) {
+            jmsTemplate.send(replyTo, session -> {
+                BytesMessage reply = session.createBytesMessage();
+                reply.writeBytes(response);
+                if (corrId != null) reply.setJMSCorrelationID(corrId);
+                return reply;
+            });
+        } else {
+            // eznet-tcp2jms doesn't set JMSReplyTo — fall back to configured reply queue
+            log.debug("No replyTo on message, sending to default reply queue={} correlationId={}", defaultReplyQueue, corrId);
+            jmsTemplate.send(defaultReplyQueue, session -> {
+                BytesMessage reply = session.createBytesMessage();
+                reply.writeBytes(response);
+                if (corrId != null) reply.setJMSCorrelationID(corrId);
+                return reply;
+            });
+        }
     }
 
     private void sendErrorReply(Destination replyTo, String correlationId) {

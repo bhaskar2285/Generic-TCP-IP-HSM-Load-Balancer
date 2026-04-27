@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 
 public class ThalesSocketFactory implements PooledObjectFactory<Socket> {
 
@@ -46,7 +47,19 @@ public class ThalesSocketFactory implements PooledObjectFactory<Socket> {
     @Override
     public boolean validateObject(PooledObject<Socket> p) {
         Socket s = p.getObject();
-        return s.isConnected() && !s.isClosed();
+        if (!s.isConnected() || s.isClosed()) return false;
+        // Probe with 1ms read — SocketTimeoutException = alive, -1 or IOException = dead
+        try {
+            s.setSoTimeout(1);
+            int b = s.getInputStream().read();
+            return b != -1;
+        } catch (SocketTimeoutException e) {
+            return true;
+        } catch (Exception e) {
+            return false;
+        } finally {
+            try { s.setSoTimeout(socketTimeoutMs); } catch (Exception ignored) {}
+        }
     }
 
     @Override
