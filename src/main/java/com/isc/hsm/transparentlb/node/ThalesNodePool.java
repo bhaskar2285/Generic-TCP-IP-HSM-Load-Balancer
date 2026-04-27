@@ -16,10 +16,12 @@ public class ThalesNodePool {
     private static final Logger log = LoggerFactory.getLogger(ThalesNodePool.class);
 
     private final ThalesNode node;
+    private final LbProperties props;
     private final GenericObjectPool<Socket> pool;
 
     public ThalesNodePool(ThalesNode node, LbProperties props) {
         this.node = node;
+        this.props = props;
 
         LbProperties.PoolConfig pc = props.getPool();
         GenericObjectPoolConfig<Socket> cfg = new GenericObjectPoolConfig<>();
@@ -43,9 +45,14 @@ public class ThalesNodePool {
     public byte[] send(byte[] rawCommand) throws Exception {
         node.incrementActive();
         node.recordRequest();
-        Socket socket = null;
-        try {
-            socket = pool.borrowObject();
+        // Fresh socket per request — payShield closes the connection after each response
+        // so persistent pooled sockets cause stale-connection failures under load.
+        try (Socket socket = new Socket()) {
+            socket.setSoTimeout(props.getPool().getSocketTimeoutMs());
+            socket.setTcpNoDelay(true);
+            socket.connect(new java.net.InetSocketAddress(node.getHost(), node.getPort()),
+                    props.getPool().getConnectTimeoutMs());
+
             OutputStream out = socket.getOutputStream();
             InputStream in = socket.getInputStream();
 
@@ -60,16 +67,9 @@ public class ThalesNodePool {
             return readResponse(in);
         } catch (Exception e) {
             node.recordError();
-            if (socket != null) {
-                pool.invalidateObject(socket);
-                socket = null;
-            }
             throw e;
         } finally {
             node.decrementActive();
-            if (socket != null) {
-                pool.returnObject(socket);
-            }
         }
     }
 
