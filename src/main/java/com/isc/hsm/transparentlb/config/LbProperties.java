@@ -79,6 +79,7 @@ public class LbProperties {
         private int socketTimeoutMs = 10000;
         private volatile int effectiveSocketTimeoutMs = 10000;
         private int connectTimeoutMs = 3000;
+        private int fastFailTimeoutMs = 5;
         public int getMaxTotal() { return maxTotal; }
         public void setMaxTotal(int v) { maxTotal = v; }
         public int getMinIdle() { return minIdle; }
@@ -91,6 +92,8 @@ public class LbProperties {
         public void setEffectiveSocketTimeoutMs(int v) { effectiveSocketTimeoutMs = v; }
         public int getConnectTimeoutMs() { return connectTimeoutMs; }
         public void setConnectTimeoutMs(int v) { connectTimeoutMs = v; }
+        public int getFastFailTimeoutMs() { return fastFailTimeoutMs; }
+        public void setFastFailTimeoutMs(int v) { fastFailTimeoutMs = v; }
     }
 
     public static class HealthConfig {

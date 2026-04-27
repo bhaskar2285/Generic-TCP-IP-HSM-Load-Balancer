@@ -25,15 +25,19 @@ public class ThalesNodePool {
     }
 
     public byte[] send(byte[] rawCommand) throws Exception {
+        return send(rawCommand, props.getPool().getSocketTimeoutMs());
+    }
+
+    public byte[] send(byte[] rawCommand, int timeoutMs) throws Exception {
         node.incrementActive();
         node.recordRequest();
         long t0 = System.currentTimeMillis();
         try (Socket socket = new Socket()) {
-            socket.setSoTimeout(props.getPool().getSocketTimeoutMs());
+            socket.setSoTimeout(timeoutMs);
             socket.setTcpNoDelay(true);
             socket.connect(
                 new java.net.InetSocketAddress(node.getHost(), node.getPort()),
-                props.getPool().getConnectTimeoutMs()
+                Math.min(timeoutMs, props.getPool().getConnectTimeoutMs())
             );
 
             OutputStream out = socket.getOutputStream();

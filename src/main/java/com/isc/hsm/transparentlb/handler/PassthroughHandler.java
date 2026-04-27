@@ -77,7 +77,14 @@ public class PassthroughHandler {
                 nodeId, attempt, rawCommand.length, toHex(rawCommand));
 
             try {
-                byte[] response = pool.send(rawCommand);
+                // Use fast-fail timeout when more nodes remain to try; full timeout on last node
+                List<ThalesNodePool> stillRemaining = candidates.stream()
+                    .filter(p -> !tried.contains(p))
+                    .toList();
+                int timeoutMs = stillRemaining.isEmpty()
+                    ? props.getPool().getSocketTimeoutMs()
+                    : props.getPool().getFastFailTimeoutMs();
+                byte[] response = pool.send(rawCommand, timeoutMs);
                 long latency = System.currentTimeMillis() - t0;
 
                 Timer.builder("hsm.lb.request.duration")
