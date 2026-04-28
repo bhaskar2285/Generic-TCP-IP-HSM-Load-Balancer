@@ -5,6 +5,7 @@ import com.isc.hsm.transparentlb.lb.LoadBalancerSelector;
 import com.isc.hsm.transparentlb.node.ThalesNode;
 import com.isc.hsm.transparentlb.node.ThalesNodePool;
 import com.isc.hsm.transparentlb.node.ThalesNodeRegistry;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jms.listener.DefaultMessageListenerContainer;
 import org.springframework.web.bind.annotation.*;
@@ -23,6 +24,9 @@ public class StatusController {
     private final DefaultMessageListenerContainer listenerContainer;
     private final LbProperties props;
 
+    @Value("${hsm.lb.instance-id:}")
+    private String configuredInstanceId;
+
     public StatusController(ThalesNodeRegistry registry,
                             LoadBalancerSelector lbSelector,
                             DefaultMessageListenerContainer listenerContainer,
@@ -33,12 +37,19 @@ public class StatusController {
         this.props = props;
     }
 
+    private String instanceId() {
+        if (configuredInstanceId != null && !configuredInstanceId.isBlank()) return configuredInstanceId;
+        try { return java.net.InetAddress.getLocalHost().getHostName(); }
+        catch (Exception e) { return "unknown"; }
+    }
+
     @GetMapping("/status")
     public Map<String, Object> status() {
         List<ThalesNodePool> all = registry.getAllPools();
         List<Map<String, Object>> nodes = all.stream().map(p -> nodeMap(p)).toList();
 
         Map<String, Object> result = new LinkedHashMap<>();
+        result.put("instanceId", instanceId());
         result.put("algorithm", lbSelector.get().name());
         result.put("totalNodes", all.size());
         result.put("healthyNodes", registry.getHealthyPools().size());
