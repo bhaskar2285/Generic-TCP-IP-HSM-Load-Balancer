@@ -51,6 +51,19 @@ public class ThalesNodePool {
             out.flush();
 
             byte[] response = readResponse(in);
+
+            // Verify payShield echoes request header (first 4 bytes of body = request header).
+            // Guards against stale/misrouted HSM responses reaching wrong client.
+            if (rawCommand.length >= 4 && response.length >= 4) {
+                for (int i = 0; i < 4; i++) {
+                    if (response[i] != rawCommand[i]) {
+                        throw new Exception(String.format(
+                            "HSM node %s response header mismatch at byte %d: req=0x%02X resp=0x%02X",
+                            node.getId(), i, rawCommand[i] & 0xFF, response[i] & 0xFF));
+                    }
+                }
+            }
+
             node.getResponseStats().record(System.currentTimeMillis() - t0, false);
             node.recordSuccess();
             return response;
