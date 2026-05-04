@@ -1,0 +1,141 @@
+networks:
+  hsm-net:
+    driver: bridge
+
+volumes:
+  activemq-data:
+  lb1-logs:
+  lb2-logs:
+  eznet1-logs:
+  eznet2-logs:
+
+services:
+
+  # ── ActiveMQ Master ───────────────────────────────────────────────────────
+  activemq-1:
+    image: apache/activemq-classic:5.18.3
+    container_name: activemq-1
+    hostname: activemq-1
+    networks: [hsm-net]
+    ports:
+      - "61618:61616"
+      - "18161:8161"
+    volumes:
+      - activemq-data:/data/kahadb
+      - ./activemq/activemq-master.xml:/opt/apache-activemq/conf/activemq.xml:ro
+    environment:
+      ACTIVEMQ_OPTS: "-Xms256m -Xmx512m"
+    healthcheck:
+      test: ["CMD-SHELL", "grep -q 'F0B0' /proc/net/tcp6 2>/dev/null || grep -q 'F0B0' /proc/net/tcp 2>/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 15s
+    restart: unless-stopped
+
+  # ── ActiveMQ Slave (standby — blocks on KahaDB lock, promotes on master death) ─
+  activemq-2:
+    image: apache/activemq-classic:5.18.3
+    container_name: activemq-2
+    hostname: activemq-2
+    networks: [hsm-net]
+    ports:
+      - "61619:61616"
+      - "18162:8161"
+    volumes:
+      - activemq-data:/data/kahadb
+      - ./activemq/activemq-slave.xml:/opt/apache-activemq/conf/activemq.xml:ro
+    environment:
+      ACTIVEMQ_OPTS: "-Xms128m -Xmx256m"
+    restart: unless-stopped
+    depends_on:
+      activemq-1:
+        condition: service_healthy
+
+  # ── LB-1 ─────────────────────────────────────────────────────────────────
+  lb-1:
+    build:
+      context: ./lb
+      dockerfile: Dockerfile
+    image: hsm-thales-lb:latest
+    container_name: lb-1
+    hostname: lb-1
+    networks: [hsm-net]
+    ports:
+      - "8110:8110"
+    volumes:
+      - ./config/lb-1/application.properties:/config/application.properties:ro
+      - lb1-logs:/var/log/xenticate
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      activemq-1:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "grep -q '1FAE' /proc/net/tcp6 2>/dev/null || grep -q '1FAE' /proc/net/tcp 2>/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ── LB-2 ─────────────────────────────────────────────────────────────────
+  lb-2:
+    image: hsm-thales-lb:latest
+    container_name: lb-2
+    hostname: lb-2
+    networks: [hsm-net]
+    ports:
+      - "8111:8111"
+    volumes:
+      - ./config/lb-2/application.properties:/config/application.properties:ro
+      - lb2-logs:/var/log/xenticate
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      activemq-1:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "grep -q '1FAF' /proc/net/tcp6 2>/dev/null || grep -q '1FAF' /proc/net/tcp 2>/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ── EZNet-1 ───────────────────────────────────────────────────────────────
+  eznet-1:
+    build:
+      context: ./eznet
+      dockerfile: Dockerfile
+    image: hsm-eznet:latest
+    container_name: eznet-1
+    hostname: eznet-1
+    networks: [hsm-net]
+    ports:
+      - "9100:9100"
+      - "8120:8120"
+    volumes:
+      - ./config/eznet-1/application.properties:/eznet/config/application.properties:ro
+      - eznet1-logs:/var/log/xenticate
+    depends_on:
+      activemq-1:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── EZNet-2 ───────────────────────────────────────────────────────────────
+  eznet-2:
+    image: hsm-eznet:latest
+    container_name: eznet-2
+    hostname: eznet-2
+    networks: [hsm-net]
+    ports:
+      - "9101:9100"
+      - "8121:8121"
+    volumes:
+      - ./config/eznet-2/application.properties:/eznet/config/application.properties:ro
+      - eznet2-logs:/var/log/xenticate
+    depends_on:
+      activemq-1:
+        condition: service_healthy
+    restart: unless-stopped

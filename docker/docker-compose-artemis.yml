@@ -1,0 +1,142 @@
+networks:
+  hsm-artemis-net:
+    driver: bridge
+
+volumes:
+  artemis-data:        # shared store volume — both master and slave mount this
+  lb-artemis1-logs:
+  lb-artemis2-logs:
+  eznet-artemis1-logs:
+  eznet-artemis2-logs:
+
+services:
+
+  # ── Artemis Master ────────────────────────────────────────────────────────
+  # Acquires file lock on shared journal; accepts connections immediately.
+  artemis-master:
+    image: apache/activemq-artemis:2.38.0
+    container_name: artemis-master
+    hostname: artemis-master
+    networks: [hsm-artemis-net]
+    ports:
+      - "61628:61616"   # OpenWire (host 61628 avoids clash with Classic 61618/61619)
+      - "18163:8161"    # Artemis web console
+    volumes:
+      - artemis-data:/var/lib/artemis-instance/data
+      - ./artemis/broker-master.xml:/var/lib/artemis-instance/etc/broker.xml:ro
+    environment:
+      ARTEMIS_USER: artemis
+      ARTEMIS_PASSWORD: artemis
+    healthcheck:
+      # F0B0 = hex(61616) — OpenWire port open
+      test: ["CMD-SHELL", "grep -q 'F0B0' /proc/net/tcp6 2>/dev/null || grep -q 'F0B0' /proc/net/tcp 2>/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+
+  # ── Artemis Slave (backup) ────────────────────────────────────────────────
+  # Waits on shared journal file lock. Promotes automatically on master failure.
+  artemis-slave:
+    image: apache/activemq-artemis:2.38.0
+    container_name: artemis-slave
+    hostname: artemis-slave
+    networks: [hsm-artemis-net]
+    ports:
+      - "61629:61616"   # OpenWire (standby — only active when master is down)
+      - "18164:8161"
+    volumes:
+      - artemis-data:/var/lib/artemis-instance/data
+      - ./artemis/broker-slave.xml:/var/lib/artemis-instance/etc/broker.xml:ro
+    environment:
+      ARTEMIS_USER: artemis
+      ARTEMIS_PASSWORD: artemis
+    depends_on:
+      artemis-master:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── LB-Artemis-1 ─────────────────────────────────────────────────────────
+  lb-artemis-1:
+    image: hsm-thales-lb:latest   # same JAR image as Classic stack
+    container_name: lb-artemis-1
+    hostname: lb-artemis-1
+    networks: [hsm-artemis-net]
+    ports:
+      - "8112:8112"
+    volumes:
+      - ./config/lb-artemis-1/application.properties:/config/application.properties:ro
+      - lb-artemis1-logs:/var/log/xenticate
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      artemis-master:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      # 1FB0 = hex(8112)
+      test: ["CMD-SHELL", "grep -q '1FB0' /proc/net/tcp6 2>/dev/null || grep -q '1FB0' /proc/net/tcp 2>/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ── LB-Artemis-2 ─────────────────────────────────────────────────────────
+  lb-artemis-2:
+    image: hsm-thales-lb:latest
+    container_name: lb-artemis-2
+    hostname: lb-artemis-2
+    networks: [hsm-artemis-net]
+    ports:
+      - "8113:8113"
+    volumes:
+      - ./config/lb-artemis-2/application.properties:/config/application.properties:ro
+      - lb-artemis2-logs:/var/log/xenticate
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      artemis-master:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      # 1FB1 = hex(8113)
+      test: ["CMD-SHELL", "grep -q '1FB1' /proc/net/tcp6 2>/dev/null || grep -q '1FB1' /proc/net/tcp 2>/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ── EZNet-Artemis-1 ───────────────────────────────────────────────────────
+  eznet-artemis-1:
+    image: hsm-eznet:latest   # same WAR image as Classic stack
+    container_name: eznet-artemis-1
+    hostname: eznet-artemis-1
+    networks: [hsm-artemis-net]
+    ports:
+      - "9102:9100"   # TCP inbound (ISO 8583 / HSM commands)
+      - "8122:8122"   # HTTP management
+    volumes:
+      - ./config/eznet-artemis-1/application.properties:/eznet/config/application.properties:ro
+      - eznet-artemis1-logs:/var/log/xenticate
+    depends_on:
+      artemis-master:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── EZNet-Artemis-2 ───────────────────────────────────────────────────────
+  eznet-artemis-2:
+    image: hsm-eznet:latest
+    container_name: eznet-artemis-2
+    hostname: eznet-artemis-2
+    networks: [hsm-artemis-net]
+    ports:
+      - "9103:9100"
+      - "8123:8123"
+    volumes:
+      - ./config/eznet-artemis-2/application.properties:/eznet/config/application.properties:ro
+      - eznet-artemis2-logs:/var/log/xenticate
+    depends_on:
+      artemis-master:
+        condition: service_healthy
+    restart: unless-stopped
